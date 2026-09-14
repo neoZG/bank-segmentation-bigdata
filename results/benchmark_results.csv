@@ -1,0 +1,5 @@
+timestamp,library,query_id,description,seconds,peak_rss_mb,row_count_in,row_count_out
+2026-09-14T23:15:35+00:00,polars,control_groupby_location,"filter>0, group by CustLocation, agg, sort",0.0669,583.23,,
+2026-09-14T23:15:36+00:00,dask,control_groupby_location,"filter>0, group by CustLocation, agg, sort",0.8598,583.77,,
+2026-09-14T23:15:38+00:00,modin,control_groupby_location,"filter>0, group by CustLocation, agg, sort",1.7259,199.07,,
+2026-09-14T23:17:52+00:00,pyspark,control_groupby_location,"filter>0, group by CustLocation, agg, sort",2.554,139.78,,

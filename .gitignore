@@ -1,0 +1,30 @@
+# project docs kept local only, not for GitHub
+CLAUDE.md
+Instrucciones Proyecto Grupal I.pdf
+
+# data
+data/
+!data/.gitkeep
+results/plots/
+results/*.png
+
+# credentials
+kaggle.json
+*-service-account*.json
+gcp/*.json
+
+# python / uv
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# spark / dask scratch
+spark-warehouse/
+metastore_db/
+derby.log
+dask-worker-space/
+
+# os / editor
+.DS_Store
