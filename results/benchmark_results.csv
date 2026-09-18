@@ -1,5 +1,10 @@
-timestamp,library,query_id,description,seconds,peak_rss_mb,row_count_in,row_count_out
-2026-09-14T23:15:35+00:00,polars,control_groupby_location,"filter>0, group by CustLocation, agg, sort",0.0669,583.23,,
-2026-09-14T23:15:36+00:00,dask,control_groupby_location,"filter>0, group by CustLocation, agg, sort",0.8598,583.77,,
-2026-09-14T23:15:38+00:00,modin,control_groupby_location,"filter>0, group by CustLocation, agg, sort",1.7259,199.07,,
-2026-09-14T23:17:52+00:00,pyspark,control_groupby_location,"filter>0, group by CustLocation, agg, sort",2.554,139.78,,
+timestamp,library,environment,query_id,description,seconds,peak_rss_mb,row_count_in,row_count_out
+2026-09-18T17:24:59+00:00,polars,local,control_groupby_location,"filter>0, group by CustLocation, agg, sort",0.1117,633.41,,
+2026-09-18T17:25:00+00:00,dask,local,control_groupby_location,"filter>0, group by CustLocation, agg, sort",0.8828,557.84,,
+2026-09-18T17:25:03+00:00,modin,local,control_groupby_location,"filter>0, group by CustLocation, agg, sort",1.7924,200.37,,
+2026-09-18T17:25:08+00:00,pyspark,local,control_groupby_location,"filter>0, group by CustLocation, agg, sort",2.4176,135.07,,
+2026-09-18T20:39:04+00:00,polars,cloud,control_groupby_location,"filter>0, group by CustLocation, agg, sort",1.5477,659.69,,
+2026-09-18T20:39:10+00:00,dask,cloud,control_groupby_location,"filter>0, group by CustLocation, agg, sort",4.3087,835.29,,
+2026-09-18T20:39:21+00:00,modin,cloud,control_groupby_location,"filter>0, group by CustLocation, agg, sort",10.5071,310.96,,
+2026-09-18T20:40:29+00:00,pyspark,cloud,control_groupby_location,"filter>0, group by CustLocation, agg, sort",20.2851,138.0,,
+2026-09-18T20:41:28+00:00,pyspark,cloud_distributed,control_groupby_location,"filter>0, group by CustLocation, agg, sort",25.1783,140.46,,

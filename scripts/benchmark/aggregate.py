@@ -29,8 +29,11 @@ def load_results() -> pd.DataFrame:
     return pd.read_csv(RESULTS_PATH)
 
 
+_ENV_COLORS = {"local": "#4C72B0", "cloud": "#DD8452", "cloud_distributed": "#55A868"}
+
+
 def summarize(df: pd.DataFrame) -> pd.DataFrame:
-    return df.groupby(["query_id", "library"])[["seconds", "peak_rss_mb"]].agg(
+    return df.groupby(["query_id", "library", "environment"])[["seconds", "peak_rss_mb"]].agg(
         ["mean", "median", "count"]
     )
 
@@ -38,23 +41,22 @@ def summarize(df: pd.DataFrame) -> pd.DataFrame:
 def plot_comparison(df: pd.DataFrame) -> None:
     PLOTS_DIR.mkdir(parents=True, exist_ok=True)
     for query_id, group in df.groupby("query_id"):
-        avg = group.groupby("library")[["seconds", "peak_rss_mb"]].mean()
+        avg = group.groupby(["library", "environment"])[["seconds", "peak_rss_mb"]].mean()
 
-        fig, ax = plt.subplots()
-        avg["seconds"].plot(kind="bar", ax=ax, color="#4C72B0")
-        ax.set_ylabel("seconds (lower is better)")
-        ax.set_title(f"Execution time — {query_id}")
-        fig.tight_layout()
-        fig.savefig(PLOTS_DIR / f"{query_id}_time.png")
-        plt.close(fig)
-
-        fig, ax = plt.subplots()
-        avg["peak_rss_mb"].plot(kind="bar", ax=ax, color="#DD8452")
-        ax.set_ylabel("peak RSS, MB (lower is better)")
-        ax.set_title(f"Memory usage — {query_id}")
-        fig.tight_layout()
-        fig.savefig(PLOTS_DIR / f"{query_id}_memory.png")
-        plt.close(fig)
+        for metric, ylabel, fname_suffix, title in [
+            ("seconds", "seconds (lower is better)", "time", "Execution time"),
+            ("peak_rss_mb", "peak RSS, MB (lower is better)", "memory", "Memory usage"),
+        ]:
+            pivot = avg[metric].unstack("environment").fillna(0)
+            colors = [_ENV_COLORS.get(c, "#999999") for c in pivot.columns]
+            fig, ax = plt.subplots()
+            pivot.plot(kind="bar", ax=ax, color=colors)
+            ax.set_ylabel(ylabel)
+            ax.set_title(f"{title} — {query_id}")
+            ax.legend(title="environment")
+            fig.tight_layout()
+            fig.savefig(PLOTS_DIR / f"{query_id}_{fname_suffix}.png")
+            plt.close(fig)
 
 
 def main() -> None:

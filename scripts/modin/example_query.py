@@ -28,7 +28,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from benchmark.harness import track  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DATA_PATH = REPO_ROOT / "data" / "raw" / "bank_transactions.csv"
+DATA_PATH = os.environ.get(
+    "BENCHMARK_DATA_PATH",
+    str(REPO_ROOT / "data" / "raw" / "bank_transactions.csv"),
+)
 AMOUNT_COL = "TransactionAmount (INR)"
 
 

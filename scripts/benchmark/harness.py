@@ -13,7 +13,13 @@ Usage:
 
 Caveat: this measures the *driver* process only. Fine for this project's
 local, single-machine setup — would need extending to capture distributed
-worker memory if Dask/Spark ever ran against a remote cluster.
+worker memory if Dask/Spark ever ran against a remote cluster. As of the
+local-vs-cloud comparison, each row is tagged via the `environment` field
+(default "local", override with BENCHMARK_ENVIRONMENT=cloud or
+cloud_distributed); a "cloud_distributed" row (PySpark on YARN) still only
+measures the driver's memory while real computation happens on executors
+elsewhere, so its peak_rss_mb isn't comparable to the other environments —
+only its wall-clock seconds is.
 """
 
 from __future__ import annotations
@@ -40,6 +46,7 @@ RESULTS_PATH = Path(os.environ.get("BENCHMARK_RESULTS_PATH", _DEFAULT_RESULTS_PA
 _FIELDS = [
     "timestamp",
     "library",
+    "environment",
     "query_id",
     "description",
     "seconds",
@@ -81,11 +88,13 @@ def track(
     query_id: str,
     library: str,
     description: str = "",
+    environment: str | None = None,
     row_count_in: int | None = None,
     row_count_out: int | None = None,
 ):
     """Times a block of code and estimates its peak memory footprint, then
     appends one row to results/benchmark_results.csv."""
+    env = environment if environment is not None else os.environ.get("BENCHMARK_ENVIRONMENT", "local")
     sampler = _PeakMemorySampler()
     sampler.start()
     start = time.perf_counter()
@@ -98,6 +107,7 @@ def track(
             {
                 "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "library": library,
+                "environment": env,
                 "query_id": query_id,
                 "description": description,
                 "seconds": round(elapsed, 4),
