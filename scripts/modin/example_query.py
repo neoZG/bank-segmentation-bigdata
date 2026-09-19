@@ -16,6 +16,18 @@ from pathlib import Path
 # noisy (and slow to start) on a many-core machine — cap it for a laptop-
 # scale benchmark. Must be set before modin.pandas is imported.
 os.environ.setdefault("MODIN_CPUS", "4")
+os.environ.setdefault("MODIN_ENGINE", "dask")
+
+# When BENCHMARK_DASK_SCHEDULER is set, attach to a real multi-machine Dask
+# cluster. The Client has to exist before modin.pandas is imported — Modin
+# picks up the already-connected client instead of starting a local one.
+_DASK_SCHEDULER = os.environ.get("BENCHMARK_DASK_SCHEDULER")
+_client = None
+if _DASK_SCHEDULER:
+    from distributed import Client
+
+    _client = Client(_DASK_SCHEDULER)
+    print(f"Dask cluster: workers={len(_client.scheduler_info()['workers'])}")
 
 import modin.pandas as pd  # noqa: E402
 
@@ -36,6 +48,14 @@ AMOUNT_COL = "TransactionAmount (INR)"
 
 
 def main() -> None:
+    if os.environ.get("BENCHMARK_MODE") == "read":
+        # .shape forces Modin to finish materializing the partitions.
+        with track("read_csv", "modin", "read full CSV into memory"):
+            df = pd.read_csv(DATA_PATH)
+            rows = df.shape[0]
+        print(f"rows: {rows}")
+        return
+
     with track("control_groupby_location", "modin", "filter>0, group by CustLocation, agg, sort"):
         df = pd.read_csv(DATA_PATH)
         filtered = df[df[AMOUNT_COL] > 0]

@@ -29,6 +29,14 @@ AMOUNT_COL = "TransactionAmount (INR)"
 
 
 def main() -> None:
+    if os.environ.get("BENCHMARK_MODE") == "read":
+        # Isolates pure read cost (local disk vs gs://). Polars reads eagerly,
+        # so no extra step is needed to force materialization.
+        with track("read_csv", "polars", "read full CSV into memory"):
+            df = pl.read_csv(DATA_PATH)
+        print(f"rows: {df.height}")
+        return
+
     with track("control_groupby_location", "polars", "filter>0, group by CustLocation, agg, sort"):
         df = pl.read_csv(DATA_PATH)
         result = (

@@ -13,76 +13,223 @@ lean directamente sin necesidad de subirlo de nuevo, y separar los datos
 crudos (`raw/`) de los datos procesados (`processed/`) mediante prefijos
 dentro de un mismo bucket.
 
-![Contenido del bucket](gcp/screenshots/bucket-contents.png)
+![Buckets del proyecto en Cloud Storage](gcp/screenshots/bucket-contents.png)
+
+Evidencia de la creación del bucket y su contenido:
+
+```
+$ gcloud storage buckets describe gs://bank-segmentation-bigdata-data
+creation_time: 2026-09-16T23:21:04+0000
+default_storage_class: STANDARD
+location: US-CENTRAL1
+name: bank-segmentation-bigdata-data
+storage_url: gs://bank-segmentation-bigdata-data/
+uniform_bucket_level_access: true
+
+$ gcloud storage ls -l -r gs://bank-segmentation-bigdata-data/
+gs://bank-segmentation-bigdata-data/raw/:
+  67564190  2026-09-16T23:21:26Z  gs://bank-segmentation-bigdata-data/raw/bank_transactions.csv
+TOTAL: 1 objects, 67564190 bytes (64.43MiB)
+```
+
+Junto al bucket del proyecto aparecen dos buckets adicionales,
+`dataproc-staging-us-central1-...` y `dataproc-temp-us-central1-...`. Estos
+son creados automáticamente por Dataproc al aprovisionar un clúster: el
+bucket de *staging* almacena los archivos de configuración, dependencias y
+metadatos de control de los trabajos enviados al clúster, mientras que el
+bucket *temp* guarda datos temporales generados durante la ejecución. Ambos
+persisten después de eliminar el clúster, ya que Dataproc los reutiliza en
+clústeres posteriores de la misma región, y su contenido (aproximadamente
+6 MB en conjunto) no forma parte del data lake del proyecto: el dataset
+reside únicamente en `gs://bank-segmentation-bigdata-data`.
 
 ## 2. Arquitectura
 
-![Diagrama de arquitectura](gcp/screenshots/architecture-diagram.png)
+![Diagrama de arquitectura](gcp/screenshots/architecture-diagram.jpeg)
+
+La arquitectura se compone de cuatro bloques. La **fuente de datos** es el
+dataset Bank Customer Segmentation. Su incorporación se realiza mediante
+**ingesta por lotes (batch)**, es decir, cargas masivas del conjunto
+completo en momentos puntuales, en contraposición a una ingesta en
+streaming, donde los registros llegarían de forma continua a medida que se
+generan. Se optó por el modelo batch porque el dataset es histórico y
+estático: corresponde a transacciones ya ocurridas, no a un flujo en vivo,
+por lo que basta con una única carga del archivo CSV al data lake. El
+**data lake** en Google Cloud
+Storage separa los datos originales (`raw/`) de los datos limpios y
+transformados (`processed/`). El **procesamiento distribuido** se realiza
+sobre un clúster de Dataproc, donde el nodo maestro coordina los recursos
+mediante YARN y los nodos worker ejecutan las tareas, usando HDFS como
+sistema de archivos distribuido tanto para la entrada como para la salida
+de los programas de Hadoop MapReduce. Las cuatro bibliotecas de
+procesamiento (Polars, Dask, Modin y PySpark) operan sobre estos datos,
+leyéndolos directamente desde el bucket.
 
 ## 3. Comparativa de Bibliotecas: Local, Nube y Nube Distribuida
 
 ### 3.1 Metodología
 
-Se ejecutó la misma consulta de control (filtrar `TransactionAmount > 0`,
-agrupar por `CustLocation`, calcular conteo/suma/promedio, ordenar) en
-Polars, Dask, Modin y PySpark, midiendo tiempo de ejecución y memoria pico
-del proceso mediante un instrumento común (muestreo de RSS cada 50ms).
+Se ejecutaron dos mediciones independientes en Polars, Dask, Modin y
+PySpark:
+
+- **`read_csv`**: lectura completa del archivo, forzando la materialización
+  de los datos. Aísla el costo de acceso al dato, que es lo que distingue
+  al entorno local (disco) del de nube (red).
+- **`control_groupby_location`**: la consulta completa — filtrar
+  `TransactionAmount > 0`, agrupar por `CustLocation`, calcular
+  conteo/suma/promedio y ordenar.
+
+Ambas se midieron por separado porque Dask y PySpark evalúan de forma
+perezosa: en ellos la lectura no ocurre al invocar `read_csv`, sino al
+materializar el resultado, por lo que descomponer la consulta en fases
+dentro de una misma ejecución no daría valores representativos.
+
+Cada combinación de biblioteca, entorno y medición se repitió **5 veces**,
+reportándose la media y la desviación estándar. Las métricas registradas
+por ejecución son:
+
+- **Tiempo de ejecución** (wall-clock).
+- **Tiempo de CPU** (usuario + sistema). Su relación con el tiempo de
+  ejecución indica si el proceso estuvo calculando o esperando: un tiempo
+  de CPU muy superior al wall-clock implica paralelismo efectivo entre
+  núcleos, mientras que uno muy inferior implica espera por E/S.
+- **Memoria pico (RSS)**, muestreada cada 5ms sobre el proceso y sus
+  procesos hijos. Incluir los hijos es necesario porque PySpark ejecuta el
+  trabajo real en una JVM independiente: medir solo el proceso de Python
+  reportaría únicamente el contenedor liviano que la invoca.
+- **Bytes recibidos por red** durante el bloque medido.
 
 Se compararon tres entornos:
 
-- **Local**: equipo del autor, leyendo el CSV desde disco local.
+- **Local**: laptop personal (Asus ROG Strix G18), leyendo el CSV desde
+  disco local.
 - **Nube**: una máquina virtual de Dataproc (`e2-standard-4`, 4 vCPU/16GB),
   leyendo el mismo CSV directamente desde el bucket (`gs://...`), con el
   mismo código, en un solo proceso (PySpark en modo `local[*]`).
-- **Nube distribuida**: solo PySpark, misma máquina, pero con Spark
-  apuntando a `--master yarn`, distribuyendo la ejecución entre los 2 nodos
-  worker del clúster (`e2-standard-2` cada uno).
+- **Nube distribuida**: la consulta se reparte entre los 2 nodos worker del
+  clúster (`e2-standard-2` cada uno). PySpark se ejecuta con
+  `--master yarn`, aprovechando la integración nativa de Dataproc con YARN.
+  Dask y Modin se ejecutan sobre un clúster Dask levantado manualmente
+  sobre los mismos nodos (un scheduler en el nodo maestro y 4 procesos
+  worker repartidos entre las dos máquinas). Polars no aparece en este
+  entorno porque no dispone de un modo de ejecución distribuida: está
+  diseñado para explotar los núcleos de una única máquina.
 
-En el entorno distribuido, la memoria medida corresponde únicamente al
-proceso driver; el cómputo real ocurre en los executores de los nodos
-worker, por lo que ese valor no es comparable con los otros entornos en el
-eje de memoria, solo en el de tiempo de ejecución.
+En el entorno distribuido, la memoria y los bytes de red medidos
+corresponden únicamente al proceso driver; el cómputo y la lectura reales
+ocurren en los procesos worker de las otras máquinas, por lo que esos
+valores no son comparables con los de los otros entornos (véase la sección
+de limitaciones). El tiempo de ejecución sí es directamente comparable.
 
 ### 3.2 Resultados
 
-| Biblioteca | Entorno | Segundos | Memoria pico (MB) |
+Media ± desviación estándar sobre 5 repeticiones por celda (110 mediciones
+en total).
+
+**Consulta completa (`control_groupby_location`)**
+
+| Biblioteca | Entorno | Tiempo (s) | CPU (s) | Memoria pico (MB) | Red recibida (MB) |
+|---|---|---|---|---|---|
+| Polars | Local | 0,08 ± 0,00 | 0,66 | 633 | 0,0 |
+| Polars | Nube | 2,00 ± 0,16 | 3,31 | 690 | 72,0 |
+| Polars | Nube distribuida | no aplica | — | — | — |
+| Dask | Local | 0,91 ± 0,02 | 1,08 | 646 | 1,2 |
+| Dask | Nube | 5,05 ± 0,11 | 6,02 | 805 | 72,4 |
+| Dask | Nube distribuida | 6,86 ± 2,25 | 4,42 | 232 | 1,6 |
+| Modin | Local | 1,86 ± 0,05 | 4,91 | 1323 | 162,3 |
+| Modin | Nube | 13,60 ± 0,78 | 35,35 | 1729 | 340,1 |
+| Modin | Nube distribuida | 7,65 ± 0,45 | 5,70 | 313 | 119,9 |
+| PySpark | Local | 2,47 ± 0,03 | 21,93 | 1264 | 1,0 |
+| PySpark | Nube | 24,35 ± 1,32 | 71,97 | 1448 | 149,8 |
+| PySpark | Nube distribuida | 35,47 ± 1,72 | 52,15 | 1124 | 2,6 |
+
+**Lectura del archivo (`read_csv`)**
+
+| Biblioteca | Entorno | Tiempo (s) | Red recibida (MB) |
 |---|---|---|---|
-| Polars | Local | 0.11 | 633 |
-| Polars | Nube | 1.55 | 660 |
-| Dask | Local | 0.88 | 558 |
-| Dask | Nube | 4.31 | 835 |
-| Modin | Local | 1.79 | 200 |
-| Modin | Nube | 10.51 | 311 |
-| PySpark | Local | 2.42 | 135 |
-| PySpark | Nube | 20.29 | 138 |
-| PySpark | Nube distribuida | 25.18 | 140 |
+| Polars | Local | 0,04 ± 0,00 | 0,0 |
+| Polars | Nube | 1,90 ± 0,22 | 71,8 |
+| Dask | Local | 1,01 ± 0,03 | 0,0 |
+| Dask | Nube | 5,37 ± 0,17 | 72,6 |
+| Modin | Local | 1,49 ± 0,12 | 116,0 |
+| Modin | Nube | 11,37 ± 0,39 | 280,0 |
+| PySpark | Local | 1,73 ± 0,03 | 0,0 |
+| PySpark | Nube | 17,66 ± 1,50 | 149,5 |
+
+Esta tabla contrasta local frente a nube, que es donde cambia el origen del
+dato. El entorno distribuido se omite aquí porque en él la lectura la
+ejecutan los workers de las otras máquinas y el contador de red del driver
+no la refleja, lo que haría la columna no comparable.
 
 ![Tiempo de ejecución](gcp/screenshots/benchmark_time.png)
+![Tiempo de lectura](gcp/screenshots/benchmark_read_time.png)
+![Tiempo de CPU](gcp/screenshots/benchmark_cpu.png)
 ![Uso de memoria](gcp/screenshots/benchmark_memory.png)
 
 ### 3.3 Análisis
 
-Todas las bibliotecas resultaron más lentas en la nube que en local, en
-algunos casos de forma marcada (Polars 14x, PySpark hasta 8-10x). La
-variable que cambia entre ambos entornos es el origen de los datos: lectura
-de disco local frente a lectura por red desde Cloud Storage. Esta última
-implica latencia de red y ausencia de caché de sistema operativo en una
-máquina recién iniciada, lo cual explica la mayor parte de la diferencia
-observada, más allá de la capacidad de cómputo de la máquina virtual.
+**El acceso al dato explica la diferencia entre local y nube.** La medición
+de lectura aislada lo confirma de forma directa: en el entorno local el
+contador de red registra 0,0 MB (el archivo proviene del disco), mientras
+que en la nube registra ~72 MB, que es exactamente el tamaño del CSV
+descargado desde el bucket. El costo de esa transferencia domina el tiempo
+total: en Polars la lectura (1,90s) representa el 95% de la consulta
+completa (2,00s), y en Dask prácticamente la totalidad (5,37s frente a
+5,05s, diferencia dentro del margen de variación). Es decir, en la nube el
+tiempo no se va en calcular, sino en traer los datos.
 
-La ejecución distribuida de PySpark sobre YARN (25,18s) resultó más lenta
-que la misma consulta en un solo proceso en la nube (20,29s). El costo de
-coordinación (asignación de contenedores en los nodos worker, shuffle de
-datos por red) no se compensa con un dataset de este tamaño (~1M filas),
-que cabe cómodamente en la memoria de una sola máquina. El beneficio del
-procesamiento distribuido se manifiesta en volúmenes de datos que superan
-la capacidad de una única máquina, no en este caso de prueba.
+**La relación entre tiempo de CPU y tiempo de ejecución refuerza lo
+anterior.** En local, Polars consume 0,66s de CPU en 0,08s de ejecución
+(factor 8: usa varios núcleos en paralelo) y PySpark 21,93s en 2,47s
+(factor 9). En la nube esos factores caen a 1,65 y 2,95 respectivamente:
+el proceso pasa la mayor parte del tiempo esperando datos, no calculando.
 
-En cuanto a memoria, Polars, Dask y Modin muestran un consumo levemente
-mayor en la nube, atribuible a la sobrecarga de las librerías de lectura
-remota (`gcsfs`/`fsspec`). La memoria de PySpark se mantiene estable
-(~135-140MB) en los tres entornos porque la métrica solo captura el
-proceso driver, cuyo consumo no varía según dónde ocurra el cómputo real.
+**El efecto de la distribución no fue uniforme.** PySpark sobre YARN
+(35,47s) y Dask sobre el clúster Dask (6,86s) resultaron más lentos que sus
+ejecuciones en una sola máquina en la nube (24,35s y 5,05s). Modin, en
+cambio, mejoró de 13,60s a 7,65s, siendo la única biblioteca con un
+beneficio neto: era la más lenta en un solo proceso, y repartir la carga
+entre cuatro procesos worker en dos máquinas compensó parte de esa
+penalización. Con ~1M de filas, que caben holgadamente en una sola
+máquina, el costo de coordinación (reparto de tareas, traslado de datos
+entre nodos para la agrupación) generalmente supera la ganancia de
+paralelismo.
+
+**Ninguna configuración en la nube superó a la ejecución local**, ni
+siquiera la distribuida. El beneficio del procesamiento distribuido se
+manifiesta en volúmenes que exceden la capacidad de una única máquina,
+escenario que este caso de prueba no alcanza: la ventaja de Cloud Storage
+aquí es la durabilidad y el acceso compartido, no el rendimiento.
+
+**Memoria.** Los valores más altos corresponden a Modin (1323MB en local) y
+PySpark (1264MB), frente a Polars (633MB) y Dask (646MB), coherente con que
+los dos primeros mantienen infraestructura adicional (un clúster Dask local
+y una JVM, respectivamente). En los entornos distribuidos la cifra baja de
+forma engañosa (Dask pasa de 805MB a 232MB) porque la medición solo cubre
+el proceso driver, mientras el procesamiento real ocurre en los workers de
+las otras máquinas.
+
+### 3.4 Limitaciones
+
+- **La memoria en el entorno distribuido no es comparable.** La métrica
+  cubre el proceso driver y sus hijos en la máquina donde se lanza, pero no
+  los procesos worker de las otras máquinas, que es donde ocurre el
+  procesamiento real. Medirla requeriría instrumentar cada worker por
+  separado y agregar los picos, con mecanismos distintos para Dask y para
+  Spark. Por la misma razón, los bytes de red en ese entorno son bajos: la
+  descarga desde el bucket la realizan los workers, no el driver.
+- **El contador de red es del sistema, no del proceso**, e incluye tráfico
+  de loopback. Esto explica los ~116-162 MB que registra Modin en local
+  pese a leer del disco: corresponden a la comunicación interna entre los
+  procesos de su clúster Dask local, no a tráfico de red externo.
+- **Las ejecuciones locales se benefician de la caché de disco del sistema
+  operativo** al repetirse sobre el mismo archivo, ventaja que la máquina
+  virtual no tiene en la misma medida. Parte de la diferencia local-nube
+  puede atribuirse a este efecto, además de la latencia de red.
+- **Las mediciones corresponden a un único tamaño de dataset** (~1M filas,
+  64MB). Las conclusiones sobre el costo-beneficio de la distribución
+  aplican a ese orden de magnitud y no son extrapolables a volúmenes
+  mayores.
 
 ## 4. Hadoop MapReduce en Google Cloud Dataproc
 
@@ -178,14 +325,31 @@ gcloud dataproc clusters create bank-bd-cluster \
   --num-workers=2 --worker-machine-type=e2-standard-2 --worker-boot-disk-size=50GB \
   --project=bank-segmentation-bigdata
 
-# Ejecución de la comparativa en la nube
+# Ejecución de la comparativa en la nube (una sola máquina).
+# BENCHMARK_MODE=read mide solo la lectura; sin esa variable se ejecuta la
+# consulta completa. Cada combinación se repitió 5 veces.
 export BENCHMARK_ENVIRONMENT=cloud
 export BENCHMARK_DATA_PATH=gs://bank-segmentation-bigdata-data/raw/bank_transactions.csv
-python3 polars/example_query.py
+for rep in 1 2 3 4 5; do
+  for lib in polars dask modin pyspark; do
+    BENCHMARK_MODE=read python3 $lib/example_query.py
+    python3 $lib/example_query.py
+  done
+done
+
+# PySpark distribuido (YARN, integrado en Dataproc)
+BENCHMARK_ENVIRONMENT=cloud_distributed BENCHMARK_SPARK_MASTER=yarn python3 pyspark/example_query.py
+
+# Clúster Dask sobre los mismos nodos: scheduler en el maestro,
+# procesos worker en cada nodo worker
+dask scheduler --host 0.0.0.0                        # en el nodo maestro
+dask worker tcp://<ip-maestro>:8786 --nworkers 2     # en cada nodo worker
+
+# Dask y Modin distribuidos, conectados a ese clúster
+export BENCHMARK_ENVIRONMENT=cloud_distributed
+export BENCHMARK_DASK_SCHEDULER=tcp://<ip-maestro>:8786
 python3 dask/example_query.py
 python3 modin/example_query.py
-python3 pyspark/example_query.py
-BENCHMARK_ENVIRONMENT=cloud_distributed BENCHMARK_SPARK_MASTER=yarn python3 pyspark/example_query.py
 
 # Eliminación del clúster
 gcloud dataproc clusters delete bank-bd-cluster --region=us-central1 --quiet

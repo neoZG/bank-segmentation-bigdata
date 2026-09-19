@@ -45,6 +45,15 @@ def main() -> None:
     )
     spark.sparkContext.setLogLevel("ERROR")
 
+    if os.environ.get("BENCHMARK_MODE") == "read":
+        # Spark reads lazily; .count() forces the whole file to be scanned.
+        with track("read_csv", "pyspark", "read full CSV into memory"):
+            df = spark.read.csv(str(DATA_PATH), header=True, inferSchema=True)
+            rows = df.count()
+        print(f"rows: {rows}")
+        spark.stop()
+        return
+
     with track("control_groupby_location", "pyspark", "filter>0, group by CustLocation, agg, sort"):
         df = spark.read.csv(str(DATA_PATH), header=True, inferSchema=True)
         result = (

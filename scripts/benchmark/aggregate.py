@@ -32,28 +32,38 @@ def load_results() -> pd.DataFrame:
 _ENV_COLORS = {"local": "#4C72B0", "cloud": "#DD8452", "cloud_distributed": "#55A868"}
 
 
+_METRICS = ["seconds", "cpu_time_s", "peak_rss_mb", "net_recv_mb"]
+
+
 def summarize(df: pd.DataFrame) -> pd.DataFrame:
-    return df.groupby(["query_id", "library", "environment"])[["seconds", "peak_rss_mb"]].agg(
-        ["mean", "median", "count"]
+    """Mean and standard deviation across repetitions — std shows how stable
+    each measurement is, which a single run can't tell you."""
+    return df.groupby(["query_id", "library", "environment"])[_METRICS].agg(
+        ["mean", "std", "count"]
     )
 
 
 def plot_comparison(df: pd.DataFrame) -> None:
     PLOTS_DIR.mkdir(parents=True, exist_ok=True)
     for query_id, group in df.groupby("query_id"):
-        avg = group.groupby(["library", "environment"])[["seconds", "peak_rss_mb"]].mean()
+        stats = group.groupby(["library", "environment"])[_METRICS].agg(["mean", "std"])
 
         for metric, ylabel, fname_suffix, title in [
-            ("seconds", "seconds (lower is better)", "time", "Execution time"),
-            ("peak_rss_mb", "peak RSS, MB (lower is better)", "memory", "Memory usage"),
+            ("seconds", "segundos (menor es mejor)", "time", "Tiempo de ejecución"),
+            ("cpu_time_s", "tiempo de CPU, s", "cpu", "Tiempo de CPU"),
+            ("peak_rss_mb", "memoria pico RSS, MB", "memory", "Uso de memoria"),
         ]:
-            pivot = avg[metric].unstack("environment").fillna(0)
+            pivot = stats[(metric, "mean")].unstack("environment")
+            errors = stats[(metric, "std")].unstack("environment").reindex(
+                columns=pivot.columns
+            )
             colors = [_ENV_COLORS.get(c, "#999999") for c in pivot.columns]
             fig, ax = plt.subplots()
-            pivot.plot(kind="bar", ax=ax, color=colors)
+            # Error bars = standard deviation across the repetitions.
+            pivot.plot(kind="bar", ax=ax, color=colors, yerr=errors, capsize=3)
             ax.set_ylabel(ylabel)
             ax.set_title(f"{title} — {query_id}")
-            ax.legend(title="environment")
+            ax.legend(title="entorno")
             fig.tight_layout()
             fig.savefig(PLOTS_DIR / f"{query_id}_{fname_suffix}.png")
             plt.close(fig)
