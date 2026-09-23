@@ -1,0 +1,10 @@
+column,null_count,null_percent
+TransactionID,0,0.0
+CustomerID,0,0.0
+CustomerDOB,3397,0.324
+CustGender,1100,0.1049
+CustLocation,151,0.0144
+CustAccountBalance,2369,0.2259
+TransactionDate,0,0.0
+TransactionTime,0,0.0
+TransactionAmount (INR),0,0.0

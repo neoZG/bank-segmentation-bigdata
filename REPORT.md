@@ -4,8 +4,11 @@
 
 El dataset se almacena en un bucket de Google Cloud Storage
 (`gs://bank-segmentation-bigdata-data`, región `us-central1`, acceso
-uniforme a nivel de bucket), con el archivo original en el prefijo `raw/`
-(67.564.190 bytes, 1.048.567 filas, idéntico al archivo local).
+uniforme a nivel de bucket), organizado en dos prefijos: `raw/` contiene el
+archivo original (67.564.190 bytes, 1.048.567 filas) y `processed/` los
+resultados de las consultas, separados por biblioteca
+(`processed/polars/`, `processed/dask/`, `processed/modin/`,
+`processed/pyspark/`, 10 archivos cada uno).
 
 Usar almacenamiento en la nube permite mantener el dataset disponible y
 durable fuera de una sola máquina, que los procesos de Dataproc/Spark lo
@@ -26,11 +29,21 @@ name: bank-segmentation-bigdata-data
 storage_url: gs://bank-segmentation-bigdata-data/
 uniform_bucket_level_access: true
 
-$ gcloud storage ls -l -r gs://bank-segmentation-bigdata-data/
-gs://bank-segmentation-bigdata-data/raw/:
+$ gcloud storage ls -l gs://bank-segmentation-bigdata-data/raw/
   67564190  2026-09-16T23:21:26Z  gs://bank-segmentation-bigdata-data/raw/bank_transactions.csv
 TOTAL: 1 objects, 67564190 bytes (64.43MiB)
+
+$ gcloud storage ls gs://bank-segmentation-bigdata-data/processed/
+gs://bank-segmentation-bigdata-data/processed/dask/
+gs://bank-segmentation-bigdata-data/processed/modin/
+gs://bank-segmentation-bigdata-data/processed/polars/
+gs://bank-segmentation-bigdata-data/processed/pyspark/
 ```
+
+Los 40 archivos de `processed/` (10 consultas por cada una de las 4
+bibliotecas) fueron generados por los notebooks ejecutados en el clúster de
+Dataproc, que leen el dataset desde `raw/` y escriben sus resultados de
+vuelta al bucket.
 
 Junto al bucket del proyecto aparecen dos buckets adicionales,
 `dataproc-staging-us-central1-...` y `dataproc-temp-us-central1-...`. Estos
@@ -242,11 +255,43 @@ innecesarios.
 
 Los tres programas se ejecutaron sobre un mismo archivo de entrada,
 `locations.txt`, generado a partir de la columna `CustLocation` del
-dataset (`bank_transactions.csv`), con un valor por línea (1.048.567
-líneas), almacenado en HDFS. Dado que estos programas tokenizan por
-espacios en blanco, los nombres de ciudad compuestos por más de una palabra
-(por ejemplo, "NAVI MUMBAI") se cuentan como dos palabras separadas,
-resultando en 1.296.123 palabras totales.
+dataset (`bank_transactions.csv`) leído desde el bucket, con un valor por
+línea (1.048.567 líneas), almacenado en HDFS. Dado que estos programas
+tokenizan por espacios en blanco, los nombres de ciudad compuestos por más
+de una palabra (por ejemplo, "NAVI MUMBAI") se cuentan como dos palabras
+separadas, resultando en 1.296.123 palabras totales.
+
+Los trabajos se enviaron mediante `gcloud dataproc jobs submit hadoop`, por
+lo que quedan registrados en la consola de Dataproc y en el gestor de
+recursos YARN.
+
+![Nodos del clúster de Dataproc](gcp/screenshots/dataproc-cluster-nodes.png)
+
+*Clúster `bank-bd-cluster`: nodo maestro (`bank-bd-cluster-m`) y dos nodos
+worker (`bank-bd-cluster-w-0`, `bank-bd-cluster-w-1`).*
+
+![Trabajos ejecutados en Dataproc](gcp/screenshots/dataproc-jobs.png)
+
+*Trabajos ejecutados en el clúster: los tres programas MapReduce (tipo
+Hadoop) y una consulta PySpark sobre el dataset del bucket.*
+
+![Aplicaciones en YARN](gcp/screenshots/yarn-applications-1.png)
+
+*Gestor de recursos YARN: las tres aplicaciones MapReduce (`word mean`,
+`word median`, `word stddev`) y la consulta Spark
+(`bank-segmentation-gcs-query`), sobre 2 nodos activos y un total de
+19,20 GB de memoria y 6 vCores.*
+
+![Aplicaciones en YARN, columnas restantes](gcp/screenshots/yarn-applications-2.png)
+
+*La misma tabla desplazada hacia la derecha, mostrando las columnas de
+tiempos de inicio y finalización y el estado final: las cuatro
+aplicaciones terminaron con FinalStatus SUCCEEDED.*
+
+![Monitoreo del clúster](gcp/screenshots/dataproc-monitoring.png)
+
+*Monitoreo del clúster durante la ejecución: 2 NodeManagers activos en
+YARN, uso de HDFS, CPU y tráfico de red.*
 
 ### 4.1 WordMean
 

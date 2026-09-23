@@ -1,0 +1,4 @@
+criterion,duplicate_rows,treatment
+TransactionID,0,Eliminar repetidos
+CustomerID+TransactionDate+Amount,31,Conservar y revisar: ocurren a horas distintas
+CustomerID+TransactionDate+Time+Amount,0,Eliminar repetidos exactos del evento
